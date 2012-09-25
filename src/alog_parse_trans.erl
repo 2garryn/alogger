@@ -105,7 +105,7 @@ make_clause(_,[], _, _,_, Acc) ->
 make_clause_low(Flow, {What, [ModTag|ModTags]}, Prio, Loggers, Formatter, Acc)  ->
     AbsLogs = [abstract({Formatter,Loggers})],
     NewClause = {clause, 0, get_arity(Flow,What,ModTag),
-                 get_guard(Prio), AbsLogs},
+                 get_guard(Prio, ModTag), AbsLogs},
     make_clause_low(Flow, {What, ModTags}, Prio, Loggers, Formatter,
 		    [NewClause | Acc]);
 make_clause_low(_,{_,[]}, _, _,_, Acc) ->
@@ -205,6 +205,8 @@ check_prio(Other) ->
 %% @doc Composes new AST for get_mod_logs/3
 get_arity(Flow,mod, '_') ->
     [{integer, 0, Flow},{var,0,'Level'},{var,0,'_'},{var,0,'_'}];
+get_arity(Flow,mod, {'_', not_for, _}) ->
+    [{integer, 0, Flow},{var,0,'Level'},{var,0, 'Mod'},{var,0,'_'}];
 get_arity(Flow,mod,Mod) ->
     [{integer, 0, Flow},{var,0,'Level'},{atom,0,Mod},{var,0,'_'}];
 get_arity(Flow,tag,'_') ->
@@ -213,19 +215,34 @@ get_arity(Flow,tag,Tag) ->
     [{integer, 0, Flow},{var,0,'Level'},{var,0,'_'},{atom,0,Tag}].
 
 %% @private
-get_guard(Prio) when is_list(Prio) ->
-    get_guard(Prio, []);
-get_guard(Prio) when is_integer(Prio);is_tuple(Prio) ->
-    [get_guard_low(Prio)].
-get_guard([G|Gs], Acc) ->
-    get_guard(Gs, [get_guard_low(G)|Acc]);
-get_guard([], Acc) -> Acc.
+get_guard(Prio, {'_', not_for, Mods}) when Mods /= [] ->
+    [[{op,34,'andalso', get_guard_mods(Mods), get_guard_ops(Prio)}]];
+get_guard(Prio, [{'_', not_for, Mods}|_]) when Mods /= [] ->
+    [[{op,34,'andalso', get_guard_mods(Mods), get_guard_ops(Prio)}]];
+get_guard(Prio, _) ->
+    [[get_guard_ops(Prio)]].
 
 %% @private
-get_guard_low({G, Level}) ->
-    [{op,0,G,{var,0,'Level'},{integer,0, Level}}];
-get_guard_low(Pri) when is_integer(Pri) ->
-    [{op,0,'=:=',{var,0,'Level'},{integer,0,Pri}}].
+get_guard_mods(M) when is_atom(M)->
+   {op,0,'=/=',{var,0,'Mod'},{atom,0,M}}; 
+get_guard_mods([M|[]]) ->
+   {op,0,'=/=',{var,0,'Mod'},{atom,0,M}}; 
+get_guard_mods([M|Mods]) ->
+   {op,0,'andalso',
+                   get_guard_mods(M),
+                   get_guard_mods(Mods)}.
+
+%% @private
+get_guard_ops(Prio) when is_integer(Prio) ->
+    {op,0,'=:=',{var,0,'Level'},{integer,0,Prio}};   
+get_guard_ops({G, Level}) ->
+    {op,0,G,{var,0,'Level'},{integer,0, Level}};
+get_guard_ops([P|[]]) ->
+    get_guard_ops(P);
+get_guard_ops([P|Prios]) ->
+    {op,0,'orelse',
+                   get_guard_ops(P),
+                   get_guard_ops(Prios)}.
 
 %% @private
 def_clause() ->
@@ -286,7 +303,7 @@ change_and_remove([]) -> [].
 
 %% @private
 cmd_every({attribute,_,file,{_,_}}) ->
-    {attribute,0,file,{?IFACE_SOURCE,0}};
+     {attribute,0,file,{?IFACE_SOURCE,0}};
 cmd_every({attribute,_,module,_}) ->
     {attribute,1,module,?IFACE_MODE};
 cmd_every({attribute,_, export, Funcs}) ->
